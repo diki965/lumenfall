@@ -372,9 +372,11 @@ export function createRenderer(canvas) {
   }
 
   const TITLE_LINES = [
-    'Guard the beacon. Survive 10 waves. Win by clearing wave 10.',
-    'Chasers hunt you, shooters snipe, tanks smash the beacon.',
-    'Bosses on waves 5 and 10. Kills drop shards — spend waves well.',
+    'Guard the beacon. Survive 10 waves.',
+    'Win by clearing wave 10.',
+    'Chasers hunt you, shooters snipe,',
+    'tanks smash the beacon. Bosses on 5 and 10.',
+    'Kills drop shards — grab them between waves.',
     'WASD / arrows move · mouse aims · hold click or Space to fire',
     'P pause · M mute · R restart · 1 / 2 / 3 pick an upgrade',
     '',
@@ -428,7 +430,7 @@ export function createRenderer(canvas) {
     const best = ui.best || 0;
     if (screen === SCREEN_TITLE) {
       drawField(state, false);
-      TITLE_LINES[5] = titleBestLabel(best);
+      TITLE_LINES[7] = titleBestLabel(best);
       drawPanel('LUMENFALL', TITLE_LINES, 'Press Space, Enter or click to start', PALETTE.beacon);
       return;
     }

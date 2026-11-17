@@ -74,7 +74,11 @@ export function stageShot(name, world, random) {
     return { screen: SCREEN_TITLE, best: 0, choices: null };
   }
   if (name === 'end') {
-    runSteps(world, LIMIT_SECONDS, idleInput);
+    // Play well first, then stop fighting: the end screen shows a real run
+    // (score, a cleared wave, kills) instead of a ship that never fired.
+    const fought = runSteps(world, 26, autopilot);
+    if (fought & EVENT_WAVE_CLEAR) world.nextWave();
+    if (world.state.phase === 'fighting') runSteps(world, LIMIT_SECONDS, idleInput);
     const over = world.state.phase === 'lost';
     return { screen: over ? SCREEN_OVER : SCREEN_PLAY, best: world.state.score, choices: null };
   }
