@@ -45,9 +45,8 @@ writeFileSync(
 // Read the dossier back and report what was handed in, so a broken hand-in fails loudly
 // here instead of silently reaching the judge with an empty dossier.
 const dossier = JSON.parse(readFileSync(dossierPath, 'utf8'));
-const shots = dossier.screenshots ?? [];
+const shots = dossier.images ?? [];
 console.log(
   `LUMENFALL handed in: ${statSync(dossierPath).size} byte dossier, ` +
-    `${shots.length} screenshot(s), game files ${dossier.game?.files ?? '?'} ` +
-    `(${dossier.game?.bytes ?? '?'} bytes) -> ${out}`,
+    `${shots.length} screenshot(s) -> ${out}`,
 );
