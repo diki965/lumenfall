@@ -1,79 +1,104 @@
-// The screenshot scenes behind ?shot=start|play|end. Each one plays the real rules forward from a
-// fresh world for a fixed number of steps, steered by a simple autopilot (look ahead each way the
-// paddle could move, keep clear of blocks, chase the lowest coin when that is safe), so the frame
-// is what a short game really looks like and the same seed always gives the same frame.
-import { FIELD, PLAYER, STEP } from './config.js';
-import { EVENT_OVER, KIND_BLOCK } from './world.js';
-import { SCREEN_OVER, SCREEN_PLAY, SCREEN_TITLE } from './render.js';
+// The screenshot scenes behind ?shot=start|play|upgrade|end. Each one plays
+// the real rules forward from a fresh world for a fixed number of steps,
+// steered by a simple autopilot (kite the nearest enemy at firing range,
+// aim at it, keep shooting), so the frame is what a real game looks like and
+// the same seed always gives the same frame.
+import { STEP } from './config.js';
+import { EVENT_OVER, EVENT_WAVE_CLEAR, EVENT_WIN } from './world.js';
+import { rollUpgrades } from './upgrades.js';
+import { SCREEN_OVER, SCREEN_PLAY, SCREEN_TITLE, SCREEN_UPGRADE, SCREEN_WIN } from './render.js';
 
 const START_SECONDS = 5;
-const PLAY_SECONDS = 26;
-const END_LIMIT_SECONDS = 600;
-/**
- * How far ahead, in seconds, the autopilot checks each way it could move: the play scene's pilot
- * looks well ahead and keeps all its lives; the end scene's looks only a moment ahead, so it is
- * caught out once the blocks speed up, as a hurried player is.
- */
-const HORIZON_PLAY = 0.7;
-const HORIZON_END = 0.25;
-const SAMPLE = 1 / 30;
-const DIRECTIONS = [0, -1, 1];
-/** Extra room, each side, it keeps between the paddle and a block. */
-const MARGIN = 10;
+const PLAY_SECONDS = 20;
+const LIMIT_SECONDS = 600;
 
-/** Seconds until moving in `direction` (-1, 0, 1) runs the paddle into a block; Infinity when it never does. */
-function timeToHit(state, direction, horizon) {
-  const player = state.player;
-  for (let t = SAMPLE; t <= horizon; t += SAMPLE) {
-    const x = Math.min(FIELD.width - player.width, Math.max(0, player.x + direction * PLAYER.speed * t));
-    for (let index = 0; index < state.items.length; index += 1) {
-      const item = state.items[index];
-      if (!item.active || item.kind !== KIND_BLOCK) continue;
-      const y = item.y + item.speed * t;
-      if (y + item.height > player.y && y < player.y + player.height && item.x < x + player.width + MARGIN && item.x + item.width > x - MARGIN) return t;
-    }
+/** Steer the ship: close to 240 of the nearest enemy, then strafe; aim and fire at it. */
+function autopilot(state) {
+  let target = null;
+  let bestD = Infinity;
+  for (const e of state.enemies) {
+    if (!e.active) continue;
+    const dx = e.x - state.player.x;
+    const dy = e.y - state.player.y;
+    const d = dx * dx + dy * dy;
+    if (d < bestD) { bestD = d; target = e; }
   }
-  return Infinity;
+  if (!target) {
+    return { mx: 0, my: 0, aimX: state.player.x, aimY: state.player.y - 100, firing: false };
+  }
+  const dx = target.x - state.player.x;
+  const dy = target.y - state.player.y;
+  const d = Math.sqrt(bestD) || 1;
+  let mx = 0;
+  let my = 0;
+  if (d > 260) {
+    mx = dx / d;
+    my = dy / d;
+  } else if (d < 170) {
+    mx = -dx / d;
+    my = -dy / d;
+  } else {
+    // Strafe: orbit the enemy so the frame shows movement, not a stand-off.
+    mx = -dy / d;
+    my = dx / d;
+  }
+  return { mx, my, aimX: target.x, aimY: target.y, firing: true };
 }
 
-/** Of the safe ways to move, the one toward the lowest coin (or the centre); else the one that is hit last. */
-function autopilot(state, horizon) {
-  const player = state.player;
-  let coin = null;
-  for (let index = 0; index < state.items.length; index += 1) {
-    const item = state.items[index];
-    if (item.active && item.kind !== KIND_BLOCK && (coin === null || item.y > coin.y)) coin = item;
+/** The ship stands still and never fires: the swarm reaches it, as a hurried player is caught out. */
+function idleInput(state) {
+  return { mx: 0, my: 0, aimX: state.player.x, aimY: state.player.y - 100, firing: false };
+}
+
+function runSteps(world, seconds, drive) {
+  const steps = Math.floor(seconds / STEP);
+  let events = 0;
+  for (let i = 0; i < steps; i += 1) {
+    events = world.step(STEP, drive(world.state), false);
+    if (events & (EVENT_OVER | EVENT_WIN | EVENT_WAVE_CLEAR)) break;
   }
-  const target = coin === null ? FIELD.width / 2 : coin.x + coin.width / 2;
-  const centre = player.x + player.width / 2;
-  const wanted = target > centre + 8 ? 1 : target < centre - 8 ? -1 : 0;
-  let best = wanted;
-  let bestTime = timeToHit(state, wanted, horizon);
-  for (let index = 0; index < DIRECTIONS.length && bestTime !== Infinity; index += 1) {
-    const time = timeToHit(state, DIRECTIONS[index], horizon);
-    if (time > bestTime) {
-      bestTime = time;
-      best = DIRECTIONS[index];
-    }
-  }
-  return best;
+  return events;
 }
 
 /**
- * Set `world` to the named scene (start, play or end; any other name is start) and return the
- * screen to draw over it and the best score to show.
+ * Set `world` to the named scene (start, play, upgrade or end; any other name
+ * is start) and return the screen to draw, the best score to show and, for
+ * the upgrade scene, the three upgrade choices on the table.
  */
-export function stageShot(name, world) {
+export function stageShot(name, world, random) {
   world.reset();
-  if (name !== 'play' && name !== 'end') {
-    for (let index = 0; index < START_SECONDS / STEP; index += 1) world.step(STEP, 0, true);
-    return { screen: SCREEN_TITLE, best: 0 };
+  if (name !== 'play' && name !== 'upgrade' && name !== 'end') {
+    for (let i = 0; i < START_SECONDS / STEP; i += 1) {
+      world.step(STEP, { mx: 0, my: 0, aimX: 640, aimY: 200, firing: false }, true);
+    }
+    return { screen: SCREEN_TITLE, best: 0, choices: null };
   }
-  const limit = name === 'end' ? END_LIMIT_SECONDS : PLAY_SECONDS;
-  const horizon = name === 'end' ? HORIZON_END : HORIZON_PLAY;
-  for (let index = 0; index < limit / STEP; index += 1) {
-    if (world.step(STEP, autopilot(world.state, horizon), false) & EVENT_OVER) break;
+  if (name === 'end') {
+    runSteps(world, LIMIT_SECONDS, idleInput);
+    const over = world.state.phase === 'lost';
+    return { screen: over ? SCREEN_OVER : SCREEN_PLAY, best: world.state.score, choices: null };
   }
-  const over = world.state.lives === 0;
-  return { screen: over ? SCREEN_OVER : SCREEN_PLAY, best: world.state.score };
+  if (name === 'upgrade') {
+    runSteps(world, LIMIT_SECONDS, autopilot);
+    const choices = rollUpgrades(random, world.state.stacks);
+    return { screen: SCREEN_UPGRADE, best: world.state.score, choices };
+  }
+  // Play: fight until wave 2 is under way, so the frame shows combat, shards and the HUD.
+  let events = 0;
+  for (let i = 0; i < PLAY_SECONDS / STEP; i += 1) {
+    events = world.step(STEP, autopilot(world.state), false);
+    if (events & EVENT_WAVE_CLEAR) {
+      world.nextWave();
+      break;
+    }
+    if (events & (EVENT_OVER | EVENT_WIN)) break;
+  }
+  // A few more seconds into wave 2 for a busy frame.
+  for (let i = 0; i < 4 / STEP; i += 1) {
+    events = world.step(STEP, autopilot(world.state), false);
+    if (events & (EVENT_OVER | EVENT_WIN)) break;
+  }
+  const over = world.state.phase === 'lost';
+  const won = world.state.phase === 'won';
+  return { screen: over ? SCREEN_OVER : won ? SCREEN_WIN : SCREEN_PLAY, best: world.state.score, choices: null };
 }
